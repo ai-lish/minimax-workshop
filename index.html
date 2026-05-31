@@ -735,8 +735,8 @@
                                 <div class="form-group flex flex-col gap-1.5">
                                     <label for="musicModel" class="text-xs font-bold text-gray-400">生成模型</label>
                                     <select id="musicModel" class="bg-darkBg border border-borderCol rounded-xl p-2 text-xs focus:outline-none focus:border-brand-500">
-                                        <option value="Music-2.6">Music-2.6</option>
-                                        <option value="Music-2.0">Music-2.0</option>
+                                        <option value="music-2.6">music-2.6 (推薦)</option>
+                                        <option value="music-cover">music-cover (需參考音頻)</option>
                                     </select>
                                 </div>
                             </div>
@@ -1928,7 +1928,7 @@
                 method: 'POST',
                 headers: { 'Authorization': 'Bearer ' + APIKEY, 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    model: model || 'music-01',
+                    model: model || 'music-2.6',
                     prompt: prompt,
                     lyrics: lyrics,
                     audio_setting: { sample_rate: 44100, bitrate: 256000, format: 'mp3' }
