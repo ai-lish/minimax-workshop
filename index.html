@@ -675,12 +675,39 @@
                             <!-- [修正 5.A] 在 lyricsTopic 的 label 右側新增 AI 協助撰寫提示語按鈕 -->
                             <div class="form-group flex flex-col gap-1.5">
                                 <div class="flex justify-between items-center">
+                                    <label for="lyricsTitle" class="text-xs font-bold text-gray-400">歌曲標題</label>
+                                </div>
+                                <input type="text" id="lyricsTitle" placeholder="例如：復活的光" class="bg-darkBg border border-borderCol rounded-xl p-3 text-sm focus:outline-none focus:border-brand-500">
+                            </div>
+                            <div class="grid grid-cols-2 gap-2">
+                                <div class="form-group flex flex-col gap-1.5">
+                                    <label for="lyricsLang" class="text-xs font-bold text-gray-400">歌詞語言</label>
+                                    <select id="lyricsLang" class="bg-darkBg border border-borderCol rounded-xl p-2 text-xs focus:outline-none focus:border-brand-500">
+                                        <option value="zh-Hant">繁體中文</option>
+                                        <option value="zh-CN">簡體中文</option>
+                                        <option value="en">English</option>
+                                        <option value="ja">日本語</option>
+                                    </select>
+                                </div>
+                                <div class="form-group flex flex-col gap-1.5">
+                                    <label for="lyricsStyle" class="text-xs font-bold text-gray-400">風格</label>
+                                    <select id="lyricsStyle" class="bg-darkBg border border-borderCol rounded-xl p-2 text-xs focus:outline-none focus:border-brand-500">
+                                        <option value="抒情, 敬拜">抒情/敬拜</option>
+                                        <option value="流行, 輕快">流行/輕快</option>
+                                        <option value="搖滾, 熱情">搖滾/熱情</option>
+                                        <option value="民謠, 溫暖">民謠/溫暖</option>
+                                        <option value="抒情, 憂傷">抒情/憂傷</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="form-group flex flex-col gap-1.5">
+                                <div class="flex justify-between items-center">
                                     <label for="lyricsTopic" class="text-xs font-bold text-gray-400">歌曲主題與情感描述</label>
                                     <button type="button" onclick="openPromptAssistant('music')" class="text-[10px] bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-400 border border-indigo-500/30 rounded-lg px-2 py-0.5 flex items-center gap-1 transition">
                                         <i class="fa-solid fa-wand-magic-sparkles"></i> AI 撰寫
                                     </button>
                                 </div>
-                                <textarea id="lyricsTopic" placeholder="例：寫一首關於「夏日海灘落日」的輕快歌曲，帶有淡淡的惆悵情感..." class="bg-darkBg border border-borderCol rounded-xl p-3 text-sm focus:outline-none focus:border-brand-500 h-24 resize-none"></textarea>
+                                <textarea id="lyricsTopic" placeholder="例：寫一首關於「復活節」的基督教詩歌，充滿盼望與喜悅，適合會眾敬拜..." class="bg-darkBg border border-borderCol rounded-xl p-3 text-sm focus:outline-none focus:border-brand-500 h-24 resize-none"></textarea>
                             </div>
                             <button type="button" id="generateLyricsBtn" class="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl py-2.5 font-semibold text-sm transition flex items-center justify-center gap-2">
                                 <span class="spinner hidden h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
@@ -772,6 +799,7 @@
             't2a_v2': { method: 'POST', timeout: 120000 },
             'image_generation': { method: 'POST', timeout: 90000 },
             'music_generation': { method: 'POST', timeout: 300000 }, // 音樂生成通常需時較長，配予 5 分鐘超時保障
+            'lyrics_generation': { method: 'POST', timeout: 60000 }, // 歌詞生成配予 1 分鐘超時
         };
 
         // === 修正說明 10 ===
@@ -1788,6 +1816,7 @@
 
         // ==================== WORKSPACE 5: 歌詞與音樂生成 (Music) ====================
         const lyricsTopic = document.getElementById('lyricsTopic');
+        const lyricsTitle = document.getElementById('lyricsTitle');
         const generateLyricsBtn = document.getElementById('generateLyricsBtn');
         const lyricsDisplay = document.getElementById('lyricsDisplay');
         const lyricsInput = document.getElementById('lyricsInput');
@@ -1809,8 +1838,9 @@
             document.getElementById(`musicSubBtn-${subId}`).className = 'flex-1 py-1.5 text-xs font-semibold rounded-lg text-white bg-panelBg shadow';
         }
 
-        // AI 填詞作詞
+        // AI 填詞作詞 - 使用 MiniMax Lyric Model API
         generateLyricsBtn.addEventListener('click', async () => {
+            const title = lyricsTitle.value.trim();
             const topic = lyricsTopic.value.trim();
             if (!topic) {
                 showToast('請輸入作詞主題或方向指示', 'error');
@@ -1818,19 +1848,20 @@
             }
 
             setLoadingState(generateLyricsBtn, true);
-            lyricsDisplay.innerHTML = '<span class="text-brand-400 animate-pulse"><i class="fa-solid fa-feather-pointed"></i> 靈感湧現中，AI 正在為您譜寫精美歌詞...</span>';
+            lyricsDisplay.innerHTML = '<span class="text-brand-400 animate-pulse"><i class="fa-solid fa-feather-pointed"></i> 靈感湧現中，MiniMax Lyric Model 正在為您譜寫精美歌詞...</span>';
 
             try {
                 const payload = {
-                    model: 'MiniMax-M2.7',
-                    messages: [
-                        { role: 'system', content: '你是一位大師級填詞家，擅長根據主題寫作具備音樂感、節奏分明且分段清晰（主歌、副歌、過渡段）的中文歌詞，並以簡潔的格式輸出。' },
-                        { role: 'user', content: `請根據以下主題 and 情感寫一首完整的歌曲歌詞：${topic}` }
-                    ]
+                    mode: 'write_full_song',
+                    language: document.getElementById('lyricsLang').value,
+                    style: document.getElementById('lyricsStyle').value,
+                    title: title || 'AI 創作歌曲',
+                    prompt: topic,
+                    max_tokens: 1600
                 };
 
-                const data = await fetchMiniMax('chat/completions', payload);
-                const generatedLyrics = data.choices?.[0]?.message?.content || '未能生成歌詞';
+                const data = await fetchMiniMax('lyrics_generation', payload);
+                const generatedLyrics = data.lyrics || data.result?.lyrics || '未能生成歌詞';
                 
                 // 🔴 高風險問題 1：防禦 歌詞展示 之 DOM XSS
                 lyricsDisplay.textContent = generatedLyrics;
