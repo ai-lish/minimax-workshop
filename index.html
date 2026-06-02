@@ -189,13 +189,23 @@
                         </button>
                     </div>
                     <!-- === 修正說明 2 === -->
-                    <!-- 🔴 高風險問題 2：新增金鑰儲存暫存控制與描述（明確提示僅為防偷窺之視覺遮蔽） -->
+                    <!-- 金鑰儲存模式選擇 -->
                     <div class="flex items-center justify-between mt-1">
                         <span id="keyPrefixStatus" class="text-[9px] font-medium tracking-wide"></span>
-                        <label class="inline-flex items-center gap-1 cursor-pointer select-none">
-                            <input type="checkbox" id="rememberKeyToggle" class="rounded bg-darkBg border-borderCol text-brand-600 focus:ring-brand-500 h-3 w-3" checked>
-                            <span class="text-[9px] text-gray-500">防窺遮蔽儲存 (sessionStorage)</span>
-                        </label>
+                        <div class="flex items-center gap-3">
+                            <label class="inline-flex items-center gap-1 cursor-pointer select-none" title="關閉瀏覽器後仍保留金鑰">
+                                <input type="radio" name="storageMode" id="storageModeLocal" value="local" class="bg-darkBg border-borderCol text-yellow-500 focus:ring-yellow-400 h-3 w-3">
+                                <span class="text-[9px] text-yellow-400">💾 長期儲存</span>
+                            </label>
+                            <label class="inline-flex items-center gap-1 cursor-pointer select-none" title="關閉 Tab 後自動清除">
+                                <input type="radio" name="storageMode" id="storageModeSession" value="session" checked class="bg-darkBg border-borderCol text-brand-600 focus:ring-brand-500 h-3 w-3">
+                                <span class="text-[9px] text-gray-400">🔒 本次瀏覽</span>
+                            </label>
+                            <label class="inline-flex items-center gap-1 cursor-pointer select-none" title="金鑰僅保留於內存，唔寫入任何儲存">
+                                <input type="radio" name="storageMode" id="storageModeNone" value="none" class="bg-darkBg border-borderCol text-red-500 focus:ring-red-400 h-3 w-3">
+                                <span class="text-[9px] text-red-400">🚫 唔儲存</span>
+                            </label>
+                        </div>
                     </div>
                 </div>
                 <div id="statusBadge" class="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold bg-red-950/40 text-red-400 border border-red-900">
@@ -838,15 +848,42 @@
             }
         }
 
+                // 讀取儲存模式
+        function getStorageMode() {
+            const r = document.querySelector('input[name="storageMode"]:checked');
+            return r ? r.value : 'session';
+        }
+
+        // 依模式儲存金鑰
+        function saveKeyByMode(key, mode) {
+            localStorage.removeItem('minimax_api_key_masked');
+            sessionStorage.removeItem('minimax_api_key_masked');
+            if (mode === 'local') {
+                localStorage.setItem('minimax_api_key_masked', maskKey(key));
+            } else if (mode === 'session') {
+                sessionStorage.setItem('minimax_api_key_masked', maskKey(key));
+            }
+            // mode === 'none': 唔寫入任何 storage
+        }
+
         // 初始化
         window.addEventListener('DOMContentLoaded', () => {
-            const savedKeyMasked = sessionStorage.getItem('minimax_api_key_masked');
+            // 優先讀 localStorage，次選 sessionStorage
+            let savedKeyMasked = localStorage.getItem('minimax_api_key_masked');
+            let savedMode = 'local';
+            if (!savedKeyMasked) {
+                savedKeyMasked = sessionStorage.getItem('minimax_api_key_masked');
+                savedMode = 'session';
+            }
             if (savedKeyMasked) {
                 const savedKey = unmaskKey(savedKeyMasked);
                 document.getElementById('apiKeyInput').value = savedKey;
                 currentApiKey = savedKey;
                 detectKeyPrefix(savedKey);
                 setApiKeyConnected(true);
+                // 同步 radio 狀態
+                const radio = document.getElementById(savedMode === 'local' ? 'storageModeLocal' : 'storageModeSession');
+                if (radio) radio.checked = true;
             }
             initDropzone();
             setupKeyInputListener();
@@ -860,16 +897,15 @@
                 detectKeyPrefix(e.target.value.trim());
             });
 
-            // 處理 sessionStorage 勾選連動
-            const rememberToggle = document.getElementById('rememberKeyToggle');
-            rememberToggle.addEventListener('change', (e) => {
-                if (!e.target.checked) {
-                    sessionStorage.removeItem('minimax_api_key_masked');
-                    showToast('已關閉瀏覽器暫存，金鑰僅保留於當前內存。', 'info');
-                } else if (currentApiKey) {
-                    sessionStorage.setItem('minimax_api_key_masked', maskKey(currentApiKey));
-                    showToast('已開啟瀏覽器暫存，金鑰已進行防窺遮蔽儲存。', 'success');
-                }
+            // 儲存模式切換時即時更新
+            document.querySelectorAll('input[name="storageMode"]').forEach(radio => {
+                radio.addEventListener('change', () => {
+                    if (!currentApiKey) return;
+                    const mode = getStorageMode();
+                    saveKeyByMode(currentApiKey, mode);
+                    const labels = { local: '💾 長期儲存已啟用', session: '🔒 本次瀏覽暫存', none: '🚫 已清除所有儲存' };
+                    showToast(labels[mode] || '', 'info');
+                });
             });
         }
 
@@ -1086,6 +1122,7 @@
             const key = apiKeyInput.value.trim();
             if (!key) {
                 showToast('請輸入有效的 API 金鑰', 'error');
+                localStorage.removeItem('minimax_api_key_masked');
                 sessionStorage.removeItem('minimax_api_key_masked');
                 currentApiKey = '';
                 setApiKeyConnected(false);
@@ -1093,18 +1130,15 @@
             }
             
             currentApiKey = key;
-            const remember = document.getElementById('rememberKeyToggle').checked;
-            if (remember) {
-                sessionStorage.setItem('minimax_api_key_masked', maskKey(key));
-            } else {
-                sessionStorage.removeItem('minimax_api_key_masked');
-            }
+            const mode = getStorageMode();
+            saveKeyByMode(key, mode);
 
             detectKeyPrefix(key);
             // 🟢 輕度優化 10：修補 connectKeyBtn 未與 isTokenPlanKey 狀態同步的問題
             isTokenPlanKey = key.startsWith('sk-cp-'); 
             setApiKeyConnected(true);
-            showToast('API 金鑰已安全儲存！', 'success');
+            const modeLabels = { local: '💾 金鑰已長期儲存！', session: '🔒 金鑰已安全儲存！', none: '🚫 金鑰僅內存保留，關頁即清除' };
+            showToast(modeLabels[mode] || 'API 金鑰已連接', 'success');
         });
 
         toggleApiKey.addEventListener('click', () => {
@@ -2171,6 +2205,10 @@
 
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'hidden') {
+                // 💾 長期儲存模式：唔自動清除
+                const mode = getStorageMode();
+                if (mode === 'local') return;
+
                 window.visibilityTimeout = setTimeout(() => {
                     if (document.visibilityState === 'hidden') {
                         sessionStorage.removeItem('minimax_api_key_masked');
@@ -2179,7 +2217,7 @@
                         apiKeyInput.value = '';
                         const prefixLabel = document.getElementById('keyPrefixStatus');
                         if (prefixLabel) prefixLabel.textContent = '';
-                        // 標記在後台已清除，不在此時呼叫 showToast()
+                        // 標記在後台已清除，不在此時呈現吸山提示()
                         keyWasCleared = true;
                     }
                 }, 10000);
@@ -2187,7 +2225,7 @@
                 if (window.visibilityTimeout) {
                     clearTimeout(window.visibilityTimeout);
                 }
-                // 當用戶回到頁面 (可見) 且金鑰已被銷毀，才安全地呈現吐司警告
+                // 當用戶回到頁面 (可見) 且金鑰已被銷毁，才安全地呈現吐司警告
                 if (keyWasCleared) {
                     showToast('因檢測到您離開頁面超時，為保障隱私已自動清除遮蔽暫存。', 'info');
                     keyWasCleared = false; // 重置狀態
