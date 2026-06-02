@@ -190,8 +190,7 @@
                     </div>
                     <!-- === 修正說明 2 === -->
                     <!-- 金鑰儲存模式選擇 -->
-                    <div class="flex items-center justify-between mt-1">
-                        <span id="keyPrefixStatus" class="text-[9px] font-medium tracking-wide"></span>
+                    <div class="flex items-center justify-end mt-1">
                         <div class="flex items-center gap-3">
                             <label class="inline-flex items-center gap-1 cursor-pointer select-none" title="關閉瀏覽器後仍保留金鑰">
                                 <input type="radio" name="storageMode" id="storageModeLocal" value="local" class="bg-darkBg border-borderCol text-yellow-500 focus:ring-yellow-400 h-3 w-3">
@@ -207,6 +206,7 @@
                             </label>
                         </div>
                     </div>
+                    <span id="keyPrefixStatus" class="text-[9px] font-medium tracking-wide mt-0.5 block"></span>
                 </div>
                 <div id="statusBadge" class="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold bg-red-950/40 text-red-400 border border-red-900">
                     <span class="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse"></span> 未連線
