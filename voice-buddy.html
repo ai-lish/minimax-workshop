@@ -1,0 +1,961 @@
+<!DOCTYPE html>
+<html lang="zh-HK" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!--
+        🛡️ CSP：加入 WebSocket origins for MiniMax Realtime API
+        connect-src 加 wss://*.minimax.io
+        媒體來源保持 self + blob + data
+    -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob: data:; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; font-src 'self' https://cdnjs.cloudflare.com; connect-src 'self' https://api.minimax.io https://*.minimax.io wss://*.minimax.io https://*.minimaxi.com https://api.minimaxi.chat wss://*.minimaxi.com; img-src 'self' blob: data: https:; media-src 'self' blob: data:;">
+
+    <title>MINIMAX Voice Buddy - 語音對話・翻譯・語言練習</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0f7ff', 100: '#e0effe', 500: '#3b82f6',
+                            600: '#2563eb', 700: '#1d4ed8', 900: '#1e3a8a',
+                        },
+                        darkBg: '#090d16', panelBg: '#111827', borderCol: '#1f2937',
+                        recordingRed: '#ef4444'
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #111827; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+
+        /* 語音波形動畫 (錄音中) */
+        @keyframes voiceWave {
+            0%, 100% { transform: scaleY(0.3); }
+            50% { transform: scaleY(1); }
+        }
+        .voice-bar { animation: voiceWave 0.8s ease-in-out infinite; transform-origin: center; }
+        .voice-bar:nth-child(1) { animation-delay: 0s; }
+        .voice-bar:nth-child(2) { animation-delay: 0.1s; }
+        .voice-bar:nth-child(3) { animation-delay: 0.2s; }
+        .voice-bar:nth-child(4) { animation-delay: 0.3s; }
+        .voice-bar:nth-child(5) { animation-delay: 0.4s; }
+
+        /* Pulse for "connecting" state */
+        @keyframes pulse-ring {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { box-shadow: 0 0 0 20px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+        .pulse-recording { animation: pulse-ring 1.5s cubic-bezier(0.66, 0, 0, 1) infinite; }
+
+        /* 訊息氣泡 */
+        .msg-user { background: rgba(59, 130, 246, 0.15); border-left: 3px solid #3b82f6; }
+        .msg-ai { background: rgba(16, 185, 129, 0.15); border-left: 3px solid #10b981; }
+        .msg-system { background: rgba(107, 114, 128, 0.15); border-left: 3px solid #6b7280; }
+
+        /* Placeholder mode 樣式 */
+        .mode-placeholder {
+            background: linear-gradient(135deg, rgba(59,130,246,0.05), rgba(16,185,129,0.05));
+            border: 1px dashed rgba(107, 114, 128, 0.3);
+        }
+    </style>
+</head>
+<body class="bg-darkBg text-gray-100 min-h-screen flex flex-col antialiased">
+
+    <!-- 全域通知吐司 -->
+    <div id="toastContainer" class="fixed top-5 right-5 z-50 flex flex-col gap-3 max-w-sm pointer-events-none"></div>
+
+    <!-- 頂部列：API Key + Status -->
+    <header class="border-b border-borderCol bg-panelBg/50 backdrop-blur sticky top-0 z-40">
+        <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center gap-3">
+            <div class="flex items-center gap-3">
+                <a href="./index.html" class="text-gray-400 hover:text-white transition" title="返回主頁">
+                    <i class="fas fa-arrow-left"></i>
+                </a>
+                <h1 class="text-lg font-bold flex items-center gap-2">
+                    <i class="fas fa-microphone-lines text-brand-500"></i>
+                    <span>Voice Buddy</span>
+                </h1>
+                <span class="text-xs text-gray-500 hidden md:inline">語音對話 · 即時翻譯 · 語言練習</span>
+            </div>
+
+            <div class="flex-1"></div>
+
+            <div class="flex items-center gap-2 flex-wrap">
+                <div class="relative">
+                    <input type="password" id="apiKeyInput" placeholder="sk-... (MiniMax API Key)"
+                        class="bg-panelBg border border-borderCol text-sm rounded-lg pl-9 pr-3 py-2 w-64 md:w-80 focus:border-brand-500 focus:outline-none transition">
+                    <i class="fas fa-key absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-xs"></i>
+                </div>
+                <button id="connectBtn" onclick="toggleConnection()" class="bg-brand-600 hover:bg-brand-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2">
+                    <i class="fas fa-plug"></i>
+                    <span id="connectBtnLabel">連接</span>
+                </button>
+                <div id="wsStatus" class="flex items-center gap-2 text-xs text-gray-400">
+                    <span class="w-2 h-2 rounded-full bg-gray-500"></span>
+                    <span>未連接</span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- 主體：Sidebar + Content -->
+    <div class="flex-1 flex flex-col md:flex-row max-w-7xl mx-auto w-full px-4 py-4 gap-4">
+
+        <!-- Sidebar: Mode tabs -->
+        <nav class="md:w-56 flex-shrink-0 flex md:flex-col gap-2 overflow-x-auto no-scrollbar pb-3 md:pb-0">
+            <button onclick="switchMode('hybrid')" id="modeBtn-hybrid" class="mode-btn active-mode flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium w-full text-left transition whitespace-nowrap">
+                <i class="fas fa-comments"></i>
+                <div class="flex flex-col">
+                    <span>Hybrid 對話</span>
+                    <span class="text-xs text-gray-500 font-normal">語音 ↔ 語音</span>
+                </div>
+            </button>
+            <button onclick="switchMode('translate')" id="modeBtn-translate" class="mode-btn flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium w-full text-left transition whitespace-nowrap text-gray-400 hover:bg-panelBg hover:text-white">
+                <i class="fas fa-language"></i>
+                <div class="flex flex-col">
+                    <span>即時翻譯</span>
+                    <span class="text-xs text-gray-500 font-normal">4 種語言</span>
+                </div>
+            </button>
+            <button onclick="switchMode('practice')" id="modeBtn-practice" class="mode-btn flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium w-full text-left transition whitespace-nowrap text-gray-400 hover:bg-panelBg hover:text-white">
+                <i class="fas fa-graduation-cap"></i>
+                <div class="flex flex-col">
+                    <span>語言練習</span>
+                    <span class="text-xs text-gray-500 font-normal">AI 對手</span>
+                </div>
+            </button>
+
+            <div class="hidden md:block mt-auto pt-4 text-xs text-gray-500 px-2">
+                <p>💡 Token Plan key (`sk-cp-`) 推薦用於 Realtime API</p>
+            </div>
+        </nav>
+
+        <!-- Content: Active mode panel -->
+        <main class="flex-1 min-w-0">
+
+            <!-- ========== Hybrid 對話 Mode ========== -->
+            <div id="modePanel-hybrid" class="mode-panel flex flex-col h-full">
+                <div class="flex flex-wrap items-center gap-3 mb-4 p-3 bg-panelBg rounded-xl border border-borderCol">
+                    <div class="flex items-center gap-2">
+                        <label class="text-xs text-gray-400">你嘅語言</label>
+                        <select id="hybridInputLang" onchange="onLanguageChange()" class="bg-darkBg border border-borderCol text-sm rounded px-2 py-1 focus:border-brand-500 focus:outline-none">
+                            <option value="zh-HK" selected>廣東話</option>
+                            <option value="zh-CN">普通話</option>
+                            <option value="en">English</option>
+                            <option value="ja">日本語</option>
+                        </select>
+                    </div>
+                    <i class="fas fa-arrow-right text-gray-600 text-xs"></i>
+                    <div class="flex items-center gap-2">
+                        <label class="text-xs text-gray-400">回應語言</label>
+                        <select id="hybridOutputLang" onchange="onLanguageChange()" class="bg-darkBg border border-borderCol text-sm rounded px-2 py-1 focus:border-brand-500 focus:outline-none">
+                            <option value="zh-HK" selected>廣東話</option>
+                            <option value="zh-CN">普通話</option>
+                            <option value="en">English</option>
+                            <option value="ja">日本語</option>
+                        </select>
+                    </div>
+                    <div class="flex-1"></div>
+                    <button onclick="clearConversation('hybrid')" class="text-xs text-gray-400 hover:text-red-400 transition">
+                        <i class="fas fa-trash-can"></i> 清除對話
+                    </button>
+                </div>
+
+                <!-- Conversation log -->
+                <div id="hybridConversationLog" class="flex-1 bg-panelBg/50 rounded-xl border border-borderCol p-4 overflow-y-auto custom-scrollbar mb-4 min-h-[300px] max-h-[50vh]">
+                    <div class="text-center text-gray-500 text-sm py-12">
+                        <i class="fas fa-microphone text-4xl mb-3 text-gray-700"></i>
+                        <p>輸入 API Key，按「連接」之後就可以開始語音對話</p>
+                        <p class="text-xs mt-2">按住下方按鈕講嘢，放開後 AI 會語音回應</p>
+                    </div>
+                </div>
+
+                <!-- Voice input area -->
+                <div class="bg-panelBg rounded-xl border border-borderCol p-4">
+                    <!-- Status + waveform -->
+                    <div class="flex items-center justify-center gap-3 h-12 mb-3">
+                        <div id="hybridVoiceWave" class="flex items-center gap-1 h-full hidden">
+                            <span class="voice-bar w-1 bg-red-500 rounded-full h-full"></span>
+                            <span class="voice-bar w-1 bg-red-500 rounded-full h-full"></span>
+                            <span class="voice-bar w-1 bg-red-500 rounded-full h-full"></span>
+                            <span class="voice-bar w-1 bg-red-500 rounded-full h-full"></span>
+                            <span class="voice-bar w-1 bg-red-500 rounded-full h-full"></span>
+                        </div>
+                        <div id="hybridStatus" class="text-sm text-gray-400">準備就緒</div>
+                    </div>
+
+                    <!-- Push-to-talk button + text fallback -->
+                    <div class="flex items-center gap-3">
+                        <button id="hybridMicBtn" onmousedown="startHybridRecording()" onmouseup="stopHybridRecording()"
+                            ontouchstart="startHybridRecording()" ontouchend="stopHybridRecording()"
+                            class="flex-shrink-0 w-16 h-16 rounded-full bg-brand-600 hover:bg-brand-700 active:bg-red-500 transition flex items-center justify-center text-white text-xl select-none"
+                            disabled>
+                            <i class="fas fa-microphone"></i>
+                        </button>
+                        <input type="text" id="hybridTextInput" placeholder="或者用文字輸入..."
+                            class="flex-1 bg-darkBg border border-borderCol text-sm rounded-lg px-4 py-3 focus:border-brand-500 focus:outline-none"
+                            onkeydown="if(event.key==='Enter') sendHybridText()">
+                        <button onclick="sendHybridText()" class="bg-brand-600 hover:bg-brand-700 text-white px-4 py-3 rounded-lg text-sm transition" disabled id="hybridSendBtn">
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-2 text-center">
+                        <i class="fas fa-hand-pointer"></i> 按住咪高峰講嘢 · <i class="fas fa-keyboard"></i> 或輸入文字
+                    </p>
+                </div>
+            </div>
+
+            <!-- ========== Translate Mode ========== -->
+            <div id="modePanel-translate" class="mode-panel hidden flex-col h-full">
+                <div class="mode-placeholder rounded-xl p-8 text-center flex-1 flex flex-col items-center justify-center">
+                    <i class="fas fa-language text-5xl text-brand-500/50 mb-4"></i>
+                    <h2 class="text-xl font-bold mb-2">即時翻譯</h2>
+                    <p class="text-gray-400 text-sm mb-4">講 / 輸入原文，自動翻譯去目標語言</p>
+                    <div class="flex items-center gap-3 mb-6">
+                        <select id="translateSrcLang" class="bg-panelBg border border-borderCol text-sm rounded px-3 py-2">
+                            <option value="zh-HK">廣東話</option>
+                            <option value="en">English</option>
+                            <option value="ja">日本語</option>
+                            <option value="zh-CN">普通話</option>
+                        </select>
+                        <i class="fas fa-arrow-right text-gray-500"></i>
+                        <select id="translateTgtLang" class="bg-panelBg border border-borderCol text-sm rounded px-3 py-2">
+                            <option value="en">English</option>
+                            <option value="zh-HK" selected>廣東話</option>
+                            <option value="ja">日本語</option>
+                            <option value="zh-CN">普通話</option>
+                        </select>
+                    </div>
+                    <div class="w-full max-w-2xl">
+                        <textarea id="translateInput" rows="3" placeholder="輸入或貼上要翻譯嘅文字..."
+                            class="w-full bg-panelBg border border-borderCol text-sm rounded-lg p-3 focus:border-brand-500 focus:outline-none resize-none"></textarea>
+                        <button onclick="doTranslate()" class="mt-3 bg-brand-600 hover:bg-brand-700 text-white px-6 py-2 rounded-lg text-sm transition">
+                            <i class="fas fa-language"></i> 翻譯
+                        </button>
+                        <div id="translateOutput" class="mt-4 p-4 bg-panelBg border border-borderCol rounded-lg text-left text-sm min-h-[80px] hidden"></div>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-4">📌 Phase 3 之後會加 voice input + TTS output</p>
+                </div>
+            </div>
+
+            <!-- ========== Practice Mode ========== -->
+            <div id="modePanel-practice" class="mode-panel hidden flex-col h-full">
+                <div class="mode-placeholder rounded-xl p-8 text-center flex-1 flex flex-col items-center justify-center">
+                    <i class="fas fa-graduation-cap text-5xl text-brand-500/50 mb-4"></i>
+                    <h2 class="text-xl font-bold mb-2">語言練習 Partner</h2>
+                    <p class="text-gray-400 text-sm mb-4">揀一個場景，AI 同你練習廣東話 / 普通話 / 英文 / 日文</p>
+                    <div class="flex items-center gap-3 mb-4 flex-wrap justify-center">
+                        <select id="practiceLang" class="bg-panelBg border border-borderCol text-sm rounded px-3 py-2">
+                            <option value="zh-HK">廣東話</option>
+                            <option value="zh-CN">普通話</option>
+                            <option value="en">English</option>
+                            <option value="ja">日本語</option>
+                        </select>
+                        <select id="practiceScenario" class="bg-panelBg border border-borderCol text-sm rounded px-3 py-2">
+                            <option value="restaurant">🍜 餐廳點餐</option>
+                            <option value="travel">✈️ 旅行問路</option>
+                            <option value="interview">💼 面試自我介紹</option>
+                            <option value="shopping">🛍️ 議價購物</option>
+                            <option value="emergency">🚨 緊急求助</option>
+                            <option value="casual">💬 日常閒聊</option>
+                        </select>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-4">📌 Phase 4 之後會加 persona + 詞彙提示 + 文法反饋</p>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <script>
+    // ============================================
+    // 🎯 STATE
+    // ============================================
+    const State = {
+        apiKey: localStorage.getItem('vb_api_key') || '',
+        ws: null,
+        wsConnected: false,
+        audioContext: null,
+        mediaStream: null,
+        mediaRecorder: null,
+        isRecording: false,
+        currentMode: 'hybrid',
+        sessionConfig: null,
+        // Audio playback queue
+        playbackQueue: [],
+        isPlaying: false,
+        nextPlayTime: 0,
+        // Conversation
+        hybridLog: [],
+        // Audio chunks collected during recording
+        recordedChunks: [],
+    };
+
+    // Voice preset for each language
+    const VOICE_PRESETS = {
+        'zh-HK': 'Cantonese_2',
+        'zh-CN': 'Chinese (Mandarin)_2',
+        'en': 'English_2',
+        'ja': 'Japanese_2',
+    };
+
+    const LANG_NAMES = {
+        'zh-HK': '廣東話',
+        'zh-CN': '普通話',
+        'en': 'English',
+        'ja': '日本語',
+    };
+
+    // ============================================
+    // 🔌 WEBSOCKET CONNECTION
+    // ============================================
+    function toggleConnection() {
+        if (State.wsConnected) {
+            disconnectWS();
+        } else {
+            connectWS();
+        }
+    }
+
+    async function connectWS() {
+        const apiKey = document.getElementById('apiKeyInput').value.trim();
+        if (!apiKey) {
+            showToast('請先輸入 API Key', 'error');
+            return;
+        }
+        if (!apiKey.startsWith('sk-')) {
+            showToast('API Key 格式錯誤 (應以 sk- 開頭)', 'error');
+            return;
+        }
+
+        State.apiKey = apiKey;
+        localStorage.setItem('vb_api_key', apiKey);
+
+        updateWsStatus('connecting', '連接中...');
+
+        const url = 'wss://api.minimax.io/ws/v1/realtime?model=abab6.5s-chat';
+        try {
+            State.ws = new WebSocket(url, {
+                headers: { 'Authorization': `Bearer ${apiKey}` }
+            });
+
+            State.ws.onopen = () => onWsOpen();
+            State.ws.onmessage = (e) => onWsMessage(e);
+            State.ws.onerror = (e) => onWsError(e);
+            State.ws.onclose = (e) => onWsClose(e);
+        } catch (e) {
+            showToast(`連接失敗: ${e.message}`, 'error');
+            updateWsStatus('disconnected', '未連接');
+        }
+    }
+
+    function onWsOpen() {
+        console.log('[WS] Open');
+        State.wsConnected = true;
+        updateWsStatus('connected', '已連接');
+
+        // Send session.update with current language settings
+        sendSessionUpdate();
+
+        // Enable mic button + text input
+        document.getElementById('hybridMicBtn').disabled = false;
+        document.getElementById('hybridSendBtn').disabled = false;
+
+        appendSystemMessage('hybrid', '✅ 已連接到 MiniMax Realtime API');
+        showToast('連接成功！可以開始語音對話', 'success');
+    }
+
+    function onWsError(e) {
+        console.error('[WS] Error', e);
+        showToast(`WebSocket 錯誤: ${e.message || '未知'}`, 'error');
+    }
+
+    function onWsClose(e) {
+        console.log('[WS] Close', e.code, e.reason);
+        State.wsConnected = false;
+        updateWsStatus('disconnected', `已斷開 (${e.code})`);
+
+        document.getElementById('hybridMicBtn').disabled = true;
+        document.getElementById('hybridSendBtn').disabled = true;
+
+        if (e.code !== 1000) {
+            showToast(`連接斷開 (code ${e.code}): ${e.reason || ''}`, 'error');
+        }
+    }
+
+    function disconnectWS() {
+        if (State.ws) {
+            State.ws.close(1000, 'User disconnected');
+        }
+    }
+
+    function sendWs(obj) {
+        if (!State.ws || State.ws.readyState !== WebSocket.OPEN) {
+            console.warn('[WS] Not ready');
+            return false;
+        }
+        State.ws.send(JSON.stringify(obj));
+        return true;
+    }
+
+    function updateWsStatus(state, label) {
+        const statusEl = document.getElementById('wsStatus');
+        const dotColor = {
+            'disconnected': 'bg-gray-500',
+            'connecting': 'bg-yellow-500 animate-pulse',
+            'connected': 'bg-green-500',
+            'error': 'bg-red-500',
+        }[state] || 'bg-gray-500';
+
+        statusEl.innerHTML = `<span class="w-2 h-2 rounded-full ${dotColor}"></span><span>${label}</span>`;
+
+        const btnLabel = document.getElementById('connectBtnLabel');
+        const btnIcon = document.querySelector('#connectBtn i');
+        if (state === 'connected') {
+            btnLabel.textContent = '斷開';
+            btnIcon.className = 'fas fa-plug-circle-xmark';
+        } else {
+            btnLabel.textContent = '連接';
+            btnIcon.className = 'fas fa-plug';
+        }
+    }
+
+    // ============================================
+    // 📋 SESSION CONFIG
+    // ============================================
+    function sendSessionUpdate() {
+        const inputLang = document.getElementById('hybridInputLang').value;
+        const outputLang = document.getElementById('hybridOutputLang').value;
+        const voice = VOICE_PRESETS[outputLang] || VOICE_PRESETS['zh-HK'];
+
+        // Build instructions based on language pair
+        const inputLangName = LANG_NAMES[inputLang];
+        const outputLangName = LANG_NAMES[outputLang];
+        let instructions = `You are a helpful conversational assistant. `;
+        if (inputLang === outputLang) {
+            instructions += `The user speaks ${inputLangName}. Always reply in ${outputLangName}. `;
+        } else {
+            instructions += `The user speaks ${inputLangName}. Always reply in ${outputLangName} (translate if needed). `;
+        }
+        instructions += `Keep replies concise (1-3 sentences) for natural conversation flow. `;
+        instructions += `Be friendly, warm, and engaging.`;
+
+        const config = {
+            type: 'session.update',
+            session: {
+                modalities: ['text', 'audio'],
+                instructions: instructions,
+                voice: voice,
+                input_audio_format: 'pcm16',
+                output_audio_format: 'pcm16',
+                input_audio_transcription: { model: 'asr-01' },
+                turn_detection: {
+                    type: 'server_vad',
+                    threshold: 0.5,
+                    prefix_padding_ms: 300,
+                    silence_duration_ms: 700,
+                },
+            }
+        };
+
+        State.sessionConfig = config.session;
+        sendWs(config);
+        console.log('[WS] Session updated', { voice, instructions });
+    }
+
+    function onLanguageChange() {
+        if (State.wsConnected) {
+            sendSessionUpdate();
+            showToast('語言設定已更新', 'info');
+        }
+    }
+
+    // ============================================
+    // 📨 MESSAGE HANDLING
+    // ============================================
+    function onWsMessage(event) {
+        let msg;
+        try {
+            msg = JSON.parse(event.data);
+        } catch (e) {
+            console.warn('[WS] Non-JSON message', event.data);
+            return;
+        }
+
+        // Console log for debugging
+        if (!msg.type?.includes('audio') || msg.type === 'error') {
+            console.log('[WS] Event:', msg.type, msg);
+        }
+
+        switch (msg.type) {
+            case 'session.created':
+            case 'session.updated':
+                console.log('[WS] Session', msg.type);
+                break;
+
+            case 'input_audio_buffer.speech_started':
+                setHybridStatus('🎤 偵測到語音...');
+                break;
+
+            case 'input_audio_buffer.speech_stopped':
+                setHybridStatus('⏳ AI 諗緊...');
+                break;
+
+            case 'conversation.item.input_audio_transcription.completed':
+                if (msg.transcript) {
+                    appendUserMessage('hybrid', msg.transcript);
+                }
+                break;
+
+            case 'response.audio_transcript.delta':
+                // Append to current AI message
+                if (msg.delta) {
+                    appendAiDelta('hybrid', msg.delta);
+                }
+                break;
+
+            case 'response.audio.delta':
+                // Play audio chunk
+                if (msg.delta) {
+                    playAudioChunk(msg.delta);
+                }
+                break;
+
+            case 'response.audio.done':
+                setHybridStatus('準備就緒');
+                break;
+
+            case 'response.done':
+                // Final response completed
+                break;
+
+            case 'error':
+                console.error('[WS] API Error:', msg);
+                showToast(`API 錯誤: ${msg.error?.message || msg.error?.code || '未知'}`, 'error');
+                setHybridStatus('❌ 錯誤');
+                break;
+
+            case 'rate_limits.updated':
+                // Optional: show quota
+                break;
+        }
+    }
+
+    // ============================================
+    // 🎤 AUDIO CAPTURE
+    // ============================================
+    async function startHybridRecording() {
+        if (!State.wsConnected) {
+            showToast('請先連接', 'error');
+            return;
+        }
+        if (State.isRecording) return;
+
+        try {
+            // Get mic stream at 24kHz mono (ideal for our target format)
+            State.mediaStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    channelCount: 1,
+                    sampleRate: 24000,
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                }
+            });
+
+            // Use AudioContext + ScriptProcessor for raw PCM access
+            // (AudioWorklet would be cleaner but more complex)
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: 24000,
+            });
+            State.audioContext = audioCtx;
+
+            const source = audioCtx.createMediaStreamSource(State.mediaStream);
+            const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+
+            State.recordedChunks = [];
+            State.isRecording = true;
+            document.getElementById('hybridMicBtn').classList.add('pulse-recording', 'bg-red-500');
+            document.getElementById('hybridVoiceWave').classList.remove('hidden');
+            setHybridStatus('🔴 聆聽中... 放開發送');
+
+            processor.onaudioprocess = (e) => {
+                if (!State.isRecording) return;
+                const input = e.inputBuffer.getChannelData(0);
+                // Convert Float32 to Int16 PCM
+                const pcm16 = new Int16Array(input.length);
+                for (let i = 0; i < input.length; i++) {
+                    const s = Math.max(-1, Math.min(1, input[i]));
+                    pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                }
+                State.recordedChunks.push(pcm16);
+            };
+
+            source.connect(processor);
+            processor.connect(audioCtx.destination);
+            State._processor = processor;
+            State._source = source;
+
+        } catch (e) {
+            console.error('[Audio] Capture failed:', e);
+            showToast(`錄音失敗: ${e.message}`, 'error');
+            State.isRecording = false;
+        }
+    }
+
+    function stopHybridRecording() {
+        if (!State.isRecording) return;
+        State.isRecording = false;
+
+        // Stop mic
+        if (State.mediaStream) {
+            State.mediaStream.getTracks().forEach(t => t.stop());
+        }
+        if (State._processor) State._processor.disconnect();
+        if (State._source) State._source.disconnect();
+        if (State.audioContext) State.audioContext.close();
+
+        document.getElementById('hybridMicBtn').classList.remove('pulse-recording', 'bg-red-500');
+        document.getElementById('hybridVoiceWave').classList.add('hidden');
+        setHybridStatus('⏳ 發送中...');
+
+        // Combine all PCM chunks
+        const totalLength = State.recordedChunks.reduce((sum, arr) => sum + arr.length, 0);
+        const combined = new Int16Array(totalLength);
+        let offset = 0;
+        for (const chunk of State.recordedChunks) {
+            combined.set(chunk, offset);
+            offset += chunk.length;
+        }
+
+        // Convert Int16Array → base64
+        const base64 = pcm16ToBase64(combined);
+        console.log('[Audio] Captured', totalLength, 'samples =', (totalLength/24000).toFixed(2), 's');
+
+        // Send audio to server
+        sendWs({
+            type: 'input_audio_buffer.append',
+            audio: base64,
+        });
+
+        sendWs({
+            type: 'input_audio_buffer.commit',
+        });
+
+        sendWs({
+            type: 'response.create',
+            response: {
+                modalities: ['text', 'audio'],
+            },
+        });
+
+        // Prepare empty AI message bubble (will fill as transcript deltas arrive)
+        appendAiPlaceholder('hybrid');
+    }
+
+    function sendHybridText() {
+        const input = document.getElementById('hybridTextInput');
+        const text = input.value.trim();
+        if (!text) return;
+        if (!State.wsConnected) {
+            showToast('請先連接', 'error');
+            return;
+        }
+
+        // Add to conversation log
+        appendUserMessage('hybrid', text);
+        input.value = '';
+
+        // Send as conversation item
+        sendWs({
+            type: 'conversation.item.create',
+            item: {
+                type: 'message',
+                role: 'user',
+                content: [{
+                    type: 'input_text',
+                    text: text,
+                }],
+            },
+        });
+
+        sendWs({
+            type: 'response.create',
+            response: { modalities: ['text', 'audio'] },
+        });
+
+        appendAiPlaceholder('hybrid');
+    }
+
+    // ============================================
+    // 🔊 AUDIO PLAYBACK
+    // ============================================
+    let playbackAudioContext = null;
+
+    function getPlaybackContext() {
+        if (!playbackAudioContext || playbackAudioContext.state === 'closed') {
+            playbackAudioContext = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: 24000,
+            });
+            State.nextPlayTime = playbackAudioContext.currentTime;
+        }
+        return playbackAudioContext;
+    }
+
+    function playAudioChunk(base64Audio) {
+        try {
+            const audioCtx = getPlaybackContext();
+            const pcm16 = base64ToPcm16(base64Audio);
+            const float32 = pcm16ToFloat32(pcm16);
+
+            const buffer = audioCtx.createBuffer(1, float32.length, 24000);
+            buffer.copyToChannel(float32, 0);
+
+            const source = audioCtx.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioCtx.destination);
+
+            // Schedule sequential playback to avoid gaps
+            const startTime = Math.max(audioCtx.currentTime, State.nextPlayTime);
+            source.start(startTime);
+            State.nextPlayTime = startTime + buffer.duration;
+        } catch (e) {
+            console.error('[Audio] Playback failed:', e);
+        }
+    }
+
+    function stopPlayback() {
+        if (playbackAudioContext && playbackAudioContext.state !== 'closed') {
+            playbackAudioContext.close();
+            playbackAudioContext = null;
+        }
+        State.nextPlayTime = 0;
+    }
+
+    // ============================================
+    // 🔧 AUDIO UTILITIES
+    // ============================================
+    function pcm16ToBase64(int16Array) {
+        // Convert Int16Array to bytes, then base64
+        const bytes = new Uint8Array(int16Array.buffer, int16Array.byteOffset, int16Array.byteLength);
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        return btoa(binary);
+    }
+
+    function base64ToPcm16(base64) {
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+        }
+        return new Int16Array(bytes.buffer);
+    }
+
+    function pcm16ToFloat32(int16Array) {
+        const float32 = new Float32Array(int16Array.length);
+        for (let i = 0; i < int16Array.length; i++) {
+            float32[i] = int16Array[i] / (int16Array[i] < 0 ? 0x8000 : 0x7FFF);
+        }
+        return float32;
+    }
+
+    // ============================================
+    // 💬 CONVERSATION LOG
+    // ============================================
+    function appendUserMessage(mode, text) {
+        const logEl = document.getElementById(`${mode}ConversationLog`);
+        // Remove placeholder if present
+        const placeholder = logEl.querySelector('.text-center');
+        if (placeholder) placeholder.remove();
+
+        const div = document.createElement('div');
+        div.className = 'msg-user p-3 rounded-lg mb-2 text-sm';
+        div.innerHTML = `
+            <div class="text-xs text-gray-400 mb-1"><i class="fas fa-user"></i> 你 · ${new Date().toLocaleTimeString()}</div>
+            <div>${escapeHtml(text)}</div>
+        `;
+        logEl.appendChild(div);
+        logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function appendAiPlaceholder(mode) {
+        const logEl = document.getElementById(`${mode}ConversationLog`);
+        const div = document.createElement('div');
+        div.className = 'msg-ai p-3 rounded-lg mb-2 text-sm';
+        div.id = `ai-msg-${Date.now()}`;
+        div.innerHTML = `
+            <div class="text-xs text-gray-400 mb-1"><i class="fas fa-robot"></i> AI · <span class="animate-pulse">諗緊...</span></div>
+            <div class="ai-text"></div>
+        `;
+        logEl.appendChild(div);
+        logEl.scrollTop = logEl.scrollHeight;
+        State.currentAiBubble = div.querySelector('.ai-text');
+    }
+
+    function appendAiDelta(mode, delta) {
+        if (!State.currentAiBubble) {
+            appendAiPlaceholder(mode);
+        }
+        State.currentAiBubble.textContent += delta;
+        const logEl = document.getElementById(`${mode}ConversationLog`);
+        logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function appendSystemMessage(mode, text) {
+        const logEl = document.getElementById(`${mode}ConversationLog`);
+        const div = document.createElement('div');
+        div.className = 'msg-system p-2 rounded-lg mb-2 text-xs text-gray-400';
+        div.innerHTML = `<i class="fas fa-info-circle"></i> ${escapeHtml(text)}`;
+        logEl.appendChild(div);
+        logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function clearConversation(mode) {
+        const logEl = document.getElementById(`${mode}ConversationLog`);
+        logEl.innerHTML = `
+            <div class="text-center text-gray-500 text-sm py-12">
+                <i class="fas fa-microphone text-4xl mb-3 text-gray-700"></i>
+                <p>對話已清除</p>
+            </div>
+        `;
+    }
+
+    function setHybridStatus(text) {
+        document.getElementById('hybridStatus').textContent = text;
+    }
+
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+    }
+
+    // ============================================
+    // 🌐 TRANSLATE MODE (basic)
+    // ============================================
+    async function doTranslate() {
+        const src = document.getElementById('translateSrcLang').value;
+        const tgt = document.getElementById('translateTgtLang').value;
+        const text = document.getElementById('translateInput').value.trim();
+        if (!text) {
+            showToast('請輸入要翻譯嘅文字', 'error');
+            return;
+        }
+        if (!State.apiKey) {
+            showToast('請先輸入 API Key', 'error');
+            return;
+        }
+
+        const output = document.getElementById('translateOutput');
+        output.classList.remove('hidden');
+        output.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 翻譯中...';
+
+        const srcName = LANG_NAMES[src];
+        const tgtName = LANG_NAMES[tgt];
+
+        try {
+            const resp = await fetch('https://api.minimax.io/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${State.apiKey}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    model: 'MiniMax-M2.7',
+                    messages: [{
+                        role: 'user',
+                        content: `Translate the following text from ${srcName} to ${tgtName}. Output ONLY the translation, no explanations.
+
+Text: ${text}`,
+                    }],
+                    temperature: 0.3,
+                }),
+            });
+
+            const data = await resp.json();
+            if (data.choices?.[0]?.message?.content) {
+                output.innerHTML = `
+                    <div class="text-xs text-gray-400 mb-2">${srcName} → ${tgtName}</div>
+                    <div class="text-base">${escapeHtml(data.choices[0].message.content)}</div>
+                `;
+            } else if (data.error) {
+                output.innerHTML = `<div class="text-red-400">錯誤: ${escapeHtml(data.error.message || JSON.stringify(data.error))}</div>`;
+            } else {
+                output.innerHTML = `<div class="text-red-400">翻譯失敗</div>`;
+            }
+        } catch (e) {
+            output.innerHTML = `<div class="text-red-400">錯誤: ${escapeHtml(e.message)}</div>`;
+        }
+    }
+
+    // ============================================
+    // 🎨 UI HELPERS
+    // ============================================
+    function switchMode(mode) {
+        State.currentMode = mode;
+        document.querySelectorAll('.mode-btn').forEach(btn => {
+            btn.classList.remove('bg-brand-600/10', 'text-brand-400', 'border', 'border-brand-500/20', 'active-mode');
+            btn.classList.add('text-gray-400');
+        });
+        const activeBtn = document.getElementById(`modeBtn-${mode}`);
+        activeBtn.classList.add('bg-brand-600/10', 'text-brand-400', 'border', 'border-brand-500/20', 'active-mode');
+        activeBtn.classList.remove('text-gray-400');
+
+        document.querySelectorAll('.mode-panel').forEach(panel => {
+            panel.classList.add('hidden');
+            panel.classList.remove('flex');
+        });
+        const activePanel = document.getElementById(`modePanel-${mode}`);
+        activePanel.classList.remove('hidden');
+        activePanel.classList.add('flex');
+    }
+
+    function showToast(message, type = 'info') {
+        const container = document.getElementById('toastContainer');
+        const colors = {
+            error: 'bg-red-500/90 border-red-400',
+            success: 'bg-green-500/90 border-green-400',
+            info: 'bg-blue-500/90 border-blue-400',
+        };
+        const icons = {
+            error: 'fa-circle-exclamation',
+            success: 'fa-circle-check',
+            info: 'fa-circle-info',
+        };
+        const toast = document.createElement('div');
+        toast.className = `${colors[type] || colors.info} border-l-4 text-white px-4 py-3 rounded-lg shadow-lg pointer-events-auto text-sm flex items-center gap-2`;
+        toast.innerHTML = `<i class="fas ${icons[type] || icons.info}"></i><span>${escapeHtml(message)}</span>`;
+        container.appendChild(toast);
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            toast.style.transition = 'opacity 0.3s';
+            setTimeout(() => toast.remove(), 300);
+        }, 3500);
+    }
+
+    // ============================================
+    // 🚀 INIT
+    // ============================================
+    window.addEventListener('DOMContentLoaded', () => {
+        // Load saved API key
+        if (State.apiKey) {
+            document.getElementById('apiKeyInput').value = State.apiKey;
+        }
+        console.log('[Voice Buddy] Initialized');
+        showToast('請輸入 API Key 開始使用', 'info');
+    });
+    </script>
+</body>
+</html>
