@@ -48,6 +48,30 @@ cd minimax-workshop
 git add . && git commit -m "update" && git push
 ```
 
+## 🎙️ Voice Buddy 開發者備註
+
+Voice Buddy 用 MiniMax Realtime API 做 voice-to-voice loop。但瀏覽器嘅
+native `WebSocket` **唔支援自訂 header**，所以 MiniMax 嘅
+`Authorization: Bearer <key>` header 會被 silent drop。
+
+**解決方法**：跑個本地 Python proxy (`proxy/realtime_proxy.py`)，由佢 attach
+header upstream。
+
+```bash
+cd proxy/
+python3 -m venv venv       # 第一次先做
+./venv/bin/pip install websockets
+./venv/bin/python realtime_proxy.py
+# 預設 ws://127.0.0.1:8765，只聽 loopback
+```
+
+跟住瀏覽器開 `voice-buddy.html`，Proxy URL (`ws://localhost:8765`) 同
+port 都寫死喺 `voice-buddy.html`，唔使改設定。
+
+詳見 [`proxy/README.md`](proxy/README.md) 同
+[`PLANNING/20260710_VOICE_BUDDY_V1.md`](PLANNING/20260710_VOICE_BUDDY_V1.md)
+嘅 "Phase 7: Browser auth fix"。
+
 ---
 
 © 2024-2026 LSC Education | 僅供教學用途

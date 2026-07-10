@@ -251,7 +251,74 @@ minimax-workshop/
 
 ---
 
-**Prepared by**: 小心 (Hermes)
+## Phase 7: Browser auth fix (2026-07-10) — added after deploy discovery
+
+### 問題 (Root Cause)
+
+Phase 1 用 Node.js native WebSocket (`ws` 套件) 做 endpoint verification，
+handshake + send/receive 都成功，所以以為 frontend 直接 `new WebSocket(...)`
+去 `wss://api.minimax.io/ws/v1/realtime?model=abab6.5s-chat` 就得。
+
+**錯嘅地方**：瀏覽器嘅 native `WebSocket` constructor **唔支援 custom headers**。
+原 code 寫：
+
+```js
+State.ws = new WebSocket(url, {
+    headers: { 'Authorization': `Bearer ${apiKey}` }   // ← browser 靜悄悄 drop
+});
+```
+
+Node.js 嘅 `ws` library 有 `headers` option，所以 Phase 1 test pass 咗。
+Browser 收到 `Sec-WebSocket-Protocol` 之外無任何 custom header 上 upstream，
+MiniMax server 拒絕 handshake (effectively 401)，client 只睇到 generic
+`onerror` 事件無 detail。
+
+### 教訓 (Process Gap)
+
+> Phase 1 verification 必須用真實 deployment 路徑（瀏覽器），唔可以用 Node.js
+> 等價工具繞過。已加入 checklist：`PLANNING/CHECKLIST.md`（待補）。
+
+### 修復 (Fix — option ①, Proxy + Toast UX + Docs, 1 commit)
+
+| 元件 | 內容 |
+|---|---|
+| `proxy/realtime_proxy.py` | Python WebSocket relay (≈180 行)，loopback `ws://127.0.0.1:8765`，attach `Authorization` header upstream。`websockets` 16.x, Python 3.14 verified。Smoke tested: no-key / bad-format 都正確 reject with 1008 |
+| `proxy/README.md` | Setup + run + troubleshoot |
+| `proxy/.gitignore` | venv/ + __pycache__/ + *.log |
+| `voice-buddy.html` CSP | 加 `ws://localhost:8765 ws://127.0.0.1:8765` 入 `connect-src` |
+| `voice-buddy.html` State | 加 `PROXY_URL` + `USE_PROXY` 常數；新 `errorLog` array (cap 200) |
+| `voice-buddy.html` connectWS | 改 URL 為 `${PROXY_URL}?key=${encodeURIComponent(apiKey)}`，**唔好**再傳 `headers` option |
+| `voice-buddy.html` showToast | error toast 永不自動消失；click → clipboard copy；右邊 X 可手動關 |
+| `voice-buddy.html` Error Log modal | `<kbd>Shift</kbd>+<kbd>E</kbd>` 開關；Esc 關；Copy All / Clear 按鈕；自動 ingest `window.onerror` + `unhandledrejection` + WS errors；render cap 200 |
+| `README.md` | 「Voice Buddy 開發者備註」段：點解要有 proxy + 點 run |
+
+### 為何唔揀其他 fix
+
+| Option | Why not |
+|---|---|
+| Token-in-URL (`?key=` 直接打 MiniMax) | MiniMax Realtime endpoint 可能只認 header；URL log 會 leak key |
+| `Sec-WebSocket-Protocol` subprotocol trick | MiniMax 文檔無表明支援；hardcode 一個 protocol token 反而可能 break handshake |
+| Serverless proxy (Cloudflare Worker 等) | 增加依賴 + 公開 endpoint security surface；本地 loopback proxy 最穩陣 |
+| 後端 BFF (Node/Python 服務) | 超出 scope，呢個係 standalone static page |
+
+### Smoke test 結果 (2026-07-10)
+
+| Case | Expected | Actual |
+|---|---|---|
+| `ws://127.0.0.1:8765/` (no key) | close 1008 | ✅ close 1008, reason="Missing API key" |
+| `ws://127.0.0.1:8765/?key=hello` (bad format) | close 1008 | ✅ close 1008, reason="API key must start with 'sk-'" |
+| `ws://127.0.0.1:8765/?key=sk-cp-...` (real key) | upstream opens + relay | ⏸️ Not tested in CI (avoid consuming quota on bogus full-handshake) |
+
+### Rollout
+
+1. ✅ Proxy + Toast UX + Docs commit (this file)
+2. ⏳ Zach 喺 local 跑 `./venv/bin/python realtime_proxy.py` + 開 `voice-buddy.html`
+3. ⏳ Click 連接 → 試 hybrid 模式（廣東話 round-trip）
+4. ⏳ Push 同 verify GitHub Pages deploy
+
+---
+
+**Prepared by**: 小心 (Hermes) — MacD (MacD接力補完 Phase 7 + smoke test + docs)
 **For**: Zachli
 **Date**: 2026-07-10
-**Last updated**: 2026-07-10 (Phase 1 complete)
+**Last updated**: 2026-07-10 (Phase 7 complete; Phase 2-3 followup; smoke tested)

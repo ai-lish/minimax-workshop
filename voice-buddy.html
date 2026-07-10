@@ -8,7 +8,7 @@
         connect-src 加 wss://*.minimax.io
         媒體來源保持 self + blob + data
     -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob: data:; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; font-src 'self' https://cdnjs.cloudflare.com; connect-src 'self' https://api.minimax.io https://*.minimax.io wss://*.minimax.io https://*.minimaxi.com https://api.minimaxi.chat wss://*.minimaxi.com; img-src 'self' blob: data: https:; media-src 'self' blob: data:;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob: data:; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; font-src 'self' https://cdnjs.cloudflare.com; connect-src 'self' https://api.minimax.io https://*.minimax.io wss://*.minimax.io https://*.minimaxi.com https://api.minimaxi.chat wss://*.minimaxi.com ws://localhost:8765 ws://127.0.0.1:8765; img-src 'self' blob: data: https:; media-src 'self' blob: data:;">
 
     <title>MINIMAX Voice Buddy - 語音對話・翻譯・語言練習</title>
 
@@ -75,6 +75,40 @@
 
     <!-- 全域通知吐司 -->
     <div id="toastContainer" class="fixed top-5 right-5 z-50 flex flex-col gap-3 max-w-sm pointer-events-none"></div>
+
+    <!-- 🔴 Error Log Modal (Shift+E 開啟) -->
+    <div id="errorLogModal" class="hidden fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+        <div class="bg-panelBg border border-borderCol rounded-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+            <div class="flex items-center justify-between p-4 border-b border-borderCol">
+                <h3 class="text-lg font-bold flex items-center gap-2">
+                    <i class="fas fa-triangle-exclamation text-red-400"></i>
+                    Error Log
+                    <span id="errorLogCount" class="text-xs text-gray-500 font-normal"></span>
+                </h3>
+                <div class="flex items-center gap-2">
+                    <button onclick="copyErrorLog()" class="text-xs px-3 py-1 rounded bg-brand-600 hover:bg-brand-700 text-white transition" title="Copy all to clipboard">
+                        <i class="fas fa-copy"></i> Copy All
+                    </button>
+                    <button onclick="clearErrorLog()" class="text-xs px-3 py-1 rounded bg-gray-700 hover:bg-gray-600 text-white transition" title="Clear log">
+                        <i class="fas fa-trash"></i> Clear
+                    </button>
+                    <button onclick="toggleErrorLog()" class="text-gray-400 hover:text-white transition" title="Close (Esc)">
+                        <i class="fas fa-xmark text-lg"></i>
+                    </button>
+                </div>
+            </div>
+            <div id="errorLogBody" class="flex-1 overflow-y-auto p-4 custom-scrollbar text-sm font-mono space-y-2">
+                <div class="text-gray-500 text-center py-8">
+                    <i class="fas fa-circle-check text-green-500 text-2xl mb-2"></i>
+                    <p>冇 error，好乾淨 🎉</p>
+                </div>
+            </div>
+            <div class="p-3 border-t border-borderCol text-xs text-gray-500 flex items-center justify-between">
+                <span><kbd class="px-1.5 py-0.5 bg-darkBg rounded">Shift</kbd> + <kbd class="px-1.5 py-0.5 bg-darkBg rounded">E</kbd> 切換 · <kbd class="px-1.5 py-0.5 bg-darkBg rounded">Esc</kbd> 關閉</span>
+                <span id="errorLogHint" class="text-gray-600"></span>
+            </div>
+        </div>
+    </div>
 
     <!-- 頂部列：API Key + Status -->
     <header class="border-b border-borderCol bg-panelBg/50 backdrop-blur sticky top-0 z-40">
@@ -301,7 +335,15 @@
         hybridLog: [],
         // Audio chunks collected during recording
         recordedChunks: [],
+        // Error Log (Shift+E modal)
+        errorLog: [],
+        errorLogOpen: false,
     };
+
+    // Proxy config: browser cannot send Authorization header on native WebSocket,
+    // so we route through a local Python proxy that attaches the header upstream.
+    const PROXY_URL = 'ws://localhost:8765';
+    const USE_PROXY = true;  // Set false to attempt direct (will fail in browser due to auth header limitation)
 
     // Voice preset for each language
     const VOICE_PRESETS = {
@@ -345,11 +387,17 @@
 
         updateWsStatus('connecting', '連接中...');
 
-        const url = 'wss://api.minimax.io/ws/v1/realtime?model=abab6.5s-chat';
+        // ⚠️ Browser WebSocket cannot send custom Authorization header.
+        // Route through local Python proxy (proxy/realtime_proxy.py) which
+        // attaches the header upstream. See PLANNING/20260710_VOICE_BUDDY_V1.md
+        // "Phase 7: Browser auth fix" for full root-cause notes.
+        const url = USE_PROXY
+            ? `${PROXY_URL}?key=${encodeURIComponent(apiKey)}`
+            : `wss://api.minimax.io/ws/v1/realtime?model=abab6.5s-chat`;
+
         try {
-            State.ws = new WebSocket(url, {
-                headers: { 'Authorization': `Bearer ${apiKey}` }
-            });
+            // Note: do NOT add `headers` option — browsers silently drop it.
+            State.ws = new WebSocket(url);
 
             State.ws.onopen = () => onWsOpen();
             State.ws.onmessage = (e) => onWsMessage(e);
@@ -379,7 +427,8 @@
 
     function onWsError(e) {
         console.error('[WS] Error', e);
-        showToast(`WebSocket 錯誤: ${e.message || '未知'}`, 'error');
+        // Browser WebSocket ErrorEvent has no `.message`; detect 1006 in close handler.
+        showToast('WebSocket 錯誤（詳見 Console 或按 Shift+E 開 Error Log）', 'error', { source: 'ws-error' });
     }
 
     function onWsClose(e) {
@@ -391,7 +440,17 @@
         document.getElementById('hybridSendBtn').disabled = true;
 
         if (e.code !== 1000) {
-            showToast(`連接斷開 (code ${e.code}): ${e.reason || ''}`, 'error');
+            let hint = '';
+            if (e.code === 1006 && USE_PROXY) {
+                // 1006 = abnormal closure (proxy down, network down, DNS fail)
+                hint = '\n\n💡 本地 proxy 未啟動？喺 `proxy/` 跑 `./venv/bin/python realtime_proxy.py` （詳見 README）';
+            } else if (e.code === 4001) {
+                hint = '\n\n💡 Upstream 拒絕授權：檢查 API Key 喺 MiniMax dashboard 嘅狀態';
+            } else if (e.code === 4003) {
+                hint = '\n\n💡 網絡錯誤：確認 `api.minimax.io` 可達';
+            }
+            const msg = `連接斷開 (code ${e.code})${e.reason ? `: ${e.reason}` : ''}${hint}`;
+            showToast(msg, 'error', { source: `ws-close:${e.code}` });
         }
     }
 
@@ -922,7 +981,7 @@ Text: ${text}`,
         activePanel.classList.add('flex');
     }
 
-    function showToast(message, type = 'info') {
+    function showToast(message, type = 'info', opts = {}) {
         const container = document.getElementById('toastContainer');
         const colors = {
             error: 'bg-red-500/90 border-red-400',
@@ -934,16 +993,150 @@ Text: ${text}`,
             success: 'fa-circle-check',
             info: 'fa-circle-info',
         };
+        const isError = type === 'error';
+        // Errors: never auto-dismiss; click any toast to copy message to clipboard.
+        const autoDismissMs = isError ? null : (opts.duration || 3500);
+
         const toast = document.createElement('div');
-        toast.className = `${colors[type] || colors.info} border-l-4 text-white px-4 py-3 rounded-lg shadow-lg pointer-events-auto text-sm flex items-center gap-2`;
-        toast.innerHTML = `<i class="fas ${icons[type] || icons.info}"></i><span>${escapeHtml(message)}</span>`;
+        toast.className = `${colors[type] || colors.info} border-l-4 text-white px-4 py-3 rounded-lg shadow-lg pointer-events-auto text-sm flex items-start gap-2 cursor-pointer hover:brightness-110 transition`;
+        toast.setAttribute('role', isError ? 'alert' : 'status');
+        toast.title = isError ? '點擊複製錯誤訊息' : '點擊複製訊息';
+        toast.innerHTML = `
+            <i class="fas ${icons[type] || icons.info} mt-0.5 flex-shrink-0"></i>
+            <span class="flex-1 break-words">${escapeHtml(message)}</span>
+            ${isError ? '<i class="fas fa-xmark text-white/70 hover:text-white mt-0.5 flex-shrink-0" title="關閉"></i>' : ''}
+        `;
+
+        // Click-to-copy (works on the whole toast, including the X)
+        toast.addEventListener('click', async (ev) => {
+            // If user clicked the X on an error toast, dismiss instead
+            if (isError && ev.target.closest('.fa-xmark')) {
+                toast.style.opacity = '0';
+                toast.style.transition = 'opacity 0.3s';
+                setTimeout(() => toast.remove(), 300);
+                return;
+            }
+            try {
+                await navigator.clipboard.writeText(message);
+                toast.title = '已複製 ✓';
+                setTimeout(() => { toast.title = isError ? '點擊複製錯誤訊息' : '點擊複製訊息'; }, 1500);
+            } catch (e) {
+                console.warn('clipboard write failed', e);
+                toast.title = '複製失敗';
+            }
+        });
+
         container.appendChild(toast);
-        setTimeout(() => {
-            toast.style.opacity = '0';
-            toast.style.transition = 'opacity 0.3s';
-            setTimeout(() => toast.remove(), 300);
-        }, 3500);
+
+        // Also push errors into the in-app Error Log (Shift+E)
+        if (isError) {
+            captureError(message, opts.source || 'toast');
+        }
+
+        if (autoDismissMs !== null) {
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transition = 'opacity 0.3s';
+                setTimeout(() => toast.remove(), 300);
+            }, autoDismissMs);
+        }
     }
+
+    // ============================================
+    // 🐛 ERROR LOG (Shift+E modal)
+    // ============================================
+    function captureError(message, source = 'app') {
+        const entry = {
+            ts: new Date().toISOString(),
+            source,
+            message: String(message),
+            ua: navigator.userAgent.split(' ').slice(-2).join(' '),
+        };
+        State.errorLog.push(entry);
+        if (State.errorLog.length > 200) State.errorLog.shift();  // cap
+        renderErrorLog();
+    }
+
+    function renderErrorLog() {
+        const body = document.getElementById('errorLogBody');
+        const count = document.getElementById('errorLogCount');
+        count.textContent = State.errorLog.length
+            ? `(${State.errorLog.length}/200)`
+            : '';
+        if (!State.errorLog.length) {
+            body.innerHTML = `
+                <div class="text-gray-500 text-center py-8">
+                    <i class="fas fa-circle-check text-green-500 text-2xl mb-2"></i>
+                    <p>冇 error，好乾淨 🎉</p>
+                </div>`;
+            return;
+        }
+        body.innerHTML = State.errorLog.map((e, i) => `
+            <div class="border-l-2 border-red-500/40 pl-3 py-1 hover:bg-darkBg/40 rounded">
+                <div class="flex items-center justify-between text-xs text-gray-500">
+                    <span><i class="fas fa-tag"></i> ${escapeHtml(e.source)} · #${i + 1}</span>
+                    <span>${escapeHtml(e.ts)}</span>
+                </div>
+                <div class="text-red-300 mt-1 break-words whitespace-pre-wrap">${escapeHtml(e.message)}</div>
+            </div>
+        `).reverse().join('');
+        body.scrollTop = 0;
+    }
+
+    function toggleErrorLog() {
+        const modal = document.getElementById('errorLogModal');
+        State.errorLogOpen = !State.errorLogOpen;
+        if (State.errorLogOpen) {
+            renderErrorLog();
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        } else {
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+        }
+    }
+
+    async function copyErrorLog() {
+        if (!State.errorLog.length) return;
+        const text = State.errorLog.map((e, i) =>
+            `[${e.ts}] (${e.source}) #${i + 1}\n${e.message}\n`
+        ).join('\n---\n');
+        try {
+            await navigator.clipboard.writeText(text);
+            showToast(`已複製 ${State.errorLog.length} 條 error 到剪貼簿`, 'success', { duration: 2000 });
+        } catch (e) {
+            showToast(`複製失敗: ${e.message}`, 'error');
+        }
+    }
+
+    function clearErrorLog() {
+        if (!State.errorLog.length) return;
+        State.errorLog = [];
+        renderErrorLog();
+        showToast('Error Log 已清空', 'success', { duration: 2000 });
+    }
+
+    // Hook uncaught errors + unhandled rejections → also push to log
+    window.addEventListener('error', (e) => {
+        captureError(`${e.message} (${e.filename}:${e.lineno})`, 'uncaught');
+    });
+    window.addEventListener('unhandledrejection', (e) => {
+        captureError(`Promise: ${e.reason?.message || e.reason}`, 'unhandled-rejection');
+    });
+
+    // Shift+E to toggle Error Log modal; Esc to close
+    document.addEventListener('keydown', (e) => {
+        if (e.shiftKey && (e.key === 'E' || e.key === 'e') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            // Avoid firing when typing in inputs
+            const t = e.target;
+            if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+            e.preventDefault();
+            toggleErrorLog();
+        } else if (e.key === 'Escape' && State.errorLogOpen) {
+            e.preventDefault();
+            toggleErrorLog();
+        }
+    });
 
     // ============================================
     // 🚀 INIT
