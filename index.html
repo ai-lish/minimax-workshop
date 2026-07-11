@@ -303,7 +303,8 @@
                             <i class="fa-solid fa-circle-question"></i> MCP 指南
                         </button>
                         <select id="chatModelSelect" class="bg-darkBg border border-borderCol rounded-lg text-xs py-1.5 px-3 focus:outline-none focus:border-brand-500">
-                            <option value="MiniMax-M2.7">MiniMax-M2.7 (旗艦款)</option>
+                            <option value="MiniMax-M3" selected>MiniMax-M3 (最新旗艦，1M context, 原生多模態)</option>
+                            <option value="MiniMax-M2.7">MiniMax-M2.7 (前旗艦)</option>
                             <option value="MiniMax-M2.7-highspeed">MiniMax-M2.7-highspeed (高速版)</option>
                             <option value="MiniMax-M2.5">MiniMax-M2.5 (程式與邏輯)</option>
                             <option value="MiniMax-M2.5-highspeed">MiniMax-M2.5-highspeed</option>
@@ -344,13 +345,13 @@
                         </label>
                     </div>
 
-                    <!-- Interleaved Thinking (M2.7 Native Chain of Thought) -->
+                    <!-- Interleaved Thinking (M3 Native Chain of Thought) -->
                     <div class="bg-darkBg/60 border border-borderCol/50 rounded-xl p-3 flex justify-between items-center sm:col-span-2">
                         <div class="flex items-center gap-2">
                             <i class="fa-solid fa-brain-circuit text-indigo-400 text-sm"></i>
                             <div>
                                 <span class="text-xs font-semibold text-white">啟用思維鏈顯示 (Interleaved Thinking)</span>
-                                <p class="text-[9px] text-gray-500">M2.7 原生支援，即時查看 AI 在對話與調用工具前的深度推理邏輯</p>
+                                <p class="text-[9px] text-gray-500">M3 原生支援，即時查看 AI 在對話與調用工具前的深度推理邏輯</p>
                             </div>
                         </div>
                         <label class="relative inline-flex items-center cursor-pointer">
@@ -368,7 +369,7 @@
                             <i class="fa-solid fa-robot"></i>
                         </div>
                         <div class="bg-gray-800/40 border border-borderCol/60 rounded-r-xl rounded-bl-xl p-3 text-sm max-w-[85%] text-gray-200">
-                            您好！我是您的 MiniMax AI 助手。已為您載入最新的 M2.7 思考鏈渲染引擎以及顯式 Prompt 快取優化。請在上方配置 API 金鑰開始測試！
+                            您好！我是您的 MiniMax AI 助手。已為您載入最新的 M3 思考鏈渲染引擎以及顯式 Prompt 快取優化。請在上方配置 API 金鑰開始測試！
                         </div>
                     </div>
                 </div>
@@ -814,7 +815,7 @@
 
         // === 修正說明 7 ===
         // 新增合法 API 端點與對應超時時間配置
-        // [修正] 提高 chat/completions 超時閾值至 180,000ms (3 分鐘)，以完全契合 M2.7 的 Interleaved Thinking (原生推理) 與工具檢索所需響應時間
+        // [修正] 提高 chat/completions 超時閾值至 180,000ms (3 分鐘)，以完全契合 M3 的 Interleaved Thinking (原生推理) 與工具檢索所需響應時間
         const VALID_ENDPOINTS = {
             'chat/completions': { method: 'POST', timeout: 180000 }, 
             't2a_v2': { method: 'POST', timeout: 120000 },
@@ -1371,7 +1372,7 @@
                 const data = await fetchMiniMax('chat/completions', payload);
                 const reply = data.choices?.[0]?.message?.content || '未取得回覆';
                 
-                // 精確適配 MiniMax-M2.7 原生思維鏈的返回格式：
+                // 精確適配 MiniMax-M3 原生思維鏈的返回格式：
                 const reasoning = data.choices?.[0]?.message?.reasoning_content 
                     || data.choices?.[0]?.message?.thinking 
                     || data.choices?.[0]?.message?.thinking_process 
@@ -1426,7 +1427,7 @@
                     reasoningHtml = `
                         <details class="w-full max-w-[85%] bg-yellow-950/20 border border-yellow-900/30 rounded-lg p-2.5 text-xs text-yellow-300/90 mb-1" open>
                             <summary class="font-bold cursor-pointer select-none outline-none flex items-center gap-1.5">
-                                <i class="fa-solid fa-brain-circuit animate-pulse text-yellow-500"></i> MiniMax M2.7 思考推理軌跡
+                                <i class="fa-solid fa-brain-circuit animate-pulse text-yellow-500"></i> MiniMax M3 思考推理軌跡
                             </summary>
                             <div class="mt-2 pl-3 border-l border-yellow-700/50 whitespace-pre-wrap font-mono text-[11px] leading-relaxed">
                                 ${safeReasoning}
@@ -1568,9 +1569,9 @@
             visionResponse.innerHTML = '<div class="flex items-center gap-2 text-brand-400"><span class="h-4 w-4 border-2 border-brand-400/30 border-t-brand-400 rounded-full animate-spin"></span> 正在理解並分析影像中，請稍候...</div>';
 
             try {
-                // <!-- [修正 2] 將 Vision 模型名稱修正為 MiniMax-M2.7 (旗艦款，原生支援多模態輸入) -->
+                // <!-- [修正 2] 將 Vision 模型名稱修正為 MiniMax-M3 (最新旗艦，原生支援多模態輸入) -->
                 const payload = {
-                    model: 'MiniMax-M2.7', 
+                    model: 'MiniMax-M3', 
                     messages: [
                         {
                             role: 'user',
@@ -2170,7 +2171,7 @@
 
             try {
                 const payload = {
-                    model: 'MiniMax-M2.7',
+                    model: 'MiniMax-M3',
                     messages: [
                         { role: 'system', content: config.systemPrompt },
                         { role: 'user', content: userInputText }
